@@ -51,7 +51,7 @@ git --version
 > **Screenshot 1:** Take a screenshot of your terminal showing both
 > successful version checks and insert it here.
 >
-> `[insert screenshot]`
+> ![Screenshot 1](assets/Screenshot_1.png)
 
 ---
 
@@ -110,22 +110,22 @@ for each temporal attribute.
 
 | Attribute              | Your Type         | Justification |
 |------------------------|-------------------|---------------|
-| isbn                   |                   |               |
-| titel                  |                   |               |
-| erscheinungsjahr       |                   |               |
-| verlag                 |                   |               |
-| tagesgebuehr           |                   |               |
-| exemplar_id            |                   |               |
-| standort               |                   |               |
-| mitglied_id            |                   |               |
-| nachname               |                   |               |
-| vorname                |                   |               |
-| geburtsdatum           |                   |               |
-| email                  |                   |               |
-| beitritt_datum         |                   |               |
-| ausleihe_id            |                   |               |
-| ausleihe_datum         |                   |               |
-| rueckgabe_datum        |                   |               |
+| isbn                   | `TEXT`            | An ISBN contains hyphens and a possible leading zero, so it is an identifier string, not a number to do arithmetic on. |
+| titel                  | `TEXT`            | Free-form text. |
+| erscheinungsjahr       | `INTEGER`         | A whole calendar year with no fractional part is an integer. |
+| verlag                 | `TEXT`            | Free-form text. |
+| tagesgebuehr           | `NUMERIC(6,2)`    | Fixed-point decimal avoids floating-point rounding error. |
+| exemplar_id            | `INTEGER`         | Surrogate key; in SQLite an `INTEGER PRIMARY KEY` auto-increments and is the most efficient row id. |
+| standort               | `TEXT`            | Free-form text. |
+| mitglied_id            | `INTEGER`         | Surrogate key, same reasoning as `exemplar_id`. |
+| nachname               | `TEXT`            | Free-form name text. |
+| vorname                | `TEXT`            | Free-form name text. |
+| geburtsdatum           | `DATE`            | A calendar date; the `DATE` affinity lets us use `julianday()` and date comparisons. |
+| email                  | `TEXT`            | Free-form text. |
+| beitritt_datum         | `DATE`            | A calendar date, defaulted to `CURRENT_DATE`. |
+| ausleihe_id            | `INTEGER`         | Surrogate key. |
+| ausleihe_datum         | `DATE`            | The date a copy was borrowed. |
+| rueckgabe_datum        | `DATE` (nullable) | The return date allowed to be `NULL` while the copy is still out. |
 
 ### Questions for Task 1
 
@@ -133,19 +133,27 @@ for each temporal attribute.
 example — using arithmetic — of why `REAL` would produce an incorrect result
 for a lending fee calculation. Which type must be used instead?
 
-> *Your answer:*
+> *Your answer:* REAL is binary floating point. Most short decimals have no exact binary representation, which means 0.1 + 0.1 + 0.1 gives 0.30000000000000004, not  0.3. For a daily fee of 0.10 €, a 7-day loan should total 0.70 €. In REAL it
+won't. That error is tiny once; across thousands of invoices it becomes a  
+reconciliation problem. NUMERIC(6,2) stores values as exact fixed-point decimals. 0.10 + 0.10 + 0.10
+is 0.30. Use it for money, not REAL.
 
 **Question 1.2:** `rueckgabe_datum` must be nullable. Explain what `NULL` means
 in this specific context. Is `NULL` the same as "zero days"? Justify with
 reference to the three-valued logic of SQL.
 
-> *Your answer:*
+> *Your answer:* NULL here means the return date is unknown. The book is still out, with no return date because there's been no return yet. It's not zero and it's not empty; those would be known values. NULL is the absence of any value. That matters because SQL uses three-valued logic: TRUE, FALSE, and UNKNOWN. Any comparison against NULL evaluates to UNKNOWN, not FALSE. rueckgabe_datum = '2026-05-01' won't tell you whether a loan is open; it returns UNKNOWN. IS NULL is the right check. = something isn't.
 
 **Question 1.3:** `beitritt_datum` should default to today's date when no value
 is provided. Write the `DEFAULT` expression you would use and explain why this
 is preferable to always supplying the date explicitly in the application.
 
-> *Your answer:*
+> *Your answer:*  `beitritt_datum DATE NOT NULL DEFAULT CURRENT_DATE` lets the database fill in 
+   the join date, so the rule lives in one place. The web app, a maintenance   
+   script, a raw `sqlite3` session whatever inserts the row gets the right 
+   value without having to think about it. Leave it to callers and you're      
+   trusting each one to remember, pass the right date, and agree on what 
+   "today" is. That's three ways to get it wrong instead of one.
 
 ---
 
@@ -242,7 +250,7 @@ sqlite3 bibliothek.db ".schema"
 > **Screenshot 2:** Take a screenshot showing the `.tables` and `.schema`
 > output in your terminal.
 >
-> `[insert screenshot]`
+> ![Screenshot 2](assets/Screenshot_2.png)
 
 ### Task 2c – Test Constraints
 
@@ -268,9 +276,9 @@ INSERT INTO ausleihe VALUES (1, 1, 1, '2026-05-10', '2026-05-01');
 
 > *Describe the error or result for each test:*
 >
-> - Test A:
-> - Test B:
-> - Test C:
+> - Test A: `Runtime error: CHECK constraint failed: tagesgebuehr > 0 (19)`
+> - Test B: `Runtime error: NOT NULL constraint failed: mitglied.email (19)`
+> - Test C: `Runtime error: CHECK constraint failed: rueckgabe_datum IS NULL OR rueckgabe_datum >= ausleihe_datum (19)`
 
 ### Questions for Task 2
 
@@ -278,19 +286,19 @@ INSERT INTO ausleihe VALUES (1, 1, 1, '2026-05-10', '2026-05-01');
 constraint rather than a column constraint. Why is a column constraint
 insufficient here?
 
-> *Your answer:*
+> *Your answer:* A column constraint can only reference its own column. The check `rueckgabe_datum >= ausleihe_datum` compares two different columns, so it must be a table constraint, which has access to the entire row.
 
 **Question 2.2:** You chose `ON DELETE RESTRICT` for all foreign keys.
 Describe a realistic alternative: for which relationship would `ON DELETE
 CASCADE` be appropriate instead, and why?
 
-> *Your answer:*
+> *Your answer:* `ON DELETE CASCADE` would be appropriate for `buch → exemplar`. A physical copy (`exemplar `) has no meaning without the title (`buch`) it belongs to. If a book is removed from the catalogue, its copies should be removed automatically. Loans (`ausleihe`) should stay `RESTRICT` to preserve lending history.
 
 **Question 2.3:** `email` is declared `UNIQUE`. According to the SQL standard,
 how many `NULL` values may a `UNIQUE` column contain? Explain using the
 three-valued logic of SQL.
 
-> *Your answer:*
+> *Your answer:*  Unlimited NULLs are permitted in a UNIQUE column per the SQL standard. UNIQUE is enforced via equality: `NULL = NULL` evaluates to UNKNOWN (not TRUE) in three-valued logic, so two NULLs are never considered duplicates.
 
 ---
 
@@ -408,21 +416,21 @@ works because all affected rows are in the same table. Why can a standard SQL
 `UPDATE` not update rows in two different tables simultaneously, and what would
 you use instead in a production system?
 
-> *Your answer:*
+> *Your answer:* UPDATE targets one table at a time. To change two tables atomically, either wrap separate UPDATE statements in a transaction, or write a trigger that fires on the first table and updates the second.
 
 **Question 3.2:** Task 3b.3 raises the fee for books published before 1960
 by 10 cents. Write the equivalent statement using `NUMERIC` arithmetic:
 `tagesgebuehr = tagesgebuehr + 0.10`. Would the same statement work correctly
 with `REAL`? Explain the risk.
 
-> *Your answer:*
+> *Your answer:* NUMERIC(6,2) stores exact decimal values: 0.50 + 0.10 is 0.60, every time. REAL (IEEE 754 binary float) can't represent 0.1 exactly, so the same sum might come back as 0.5999999999999999 or 0.6000000000000001. Those errors add up, and = comparisons stop working. Use NUMERIC for money, not REAL.
 
 **Question 3.3:** Task 3c.1 deletes loans where the return date is more than
 30 days ago. A `DELETE` without a `WHERE` clause would delete all loans.
 Describe the operational consequence and explain how `BEGIN` / `ROLLBACK`
 protects against this mistake.
 
-> *Your answer:*
+> *Your answer:* `DELETE` without `WHERE` wipes the entire ausleihe table. Every lending record is gone: who borrowed what, whether they returned it, all of it. `BEGIN/ROLLBACK` protects you because the deletion is only staged, not written to disk yet. Run a `SELECT` after the `DELETE` to check; if something looks off, `ROLLBACK` puts everything back. `COMMIT` is what makes it final.
 
 ---
 
@@ -483,14 +491,14 @@ ALTER TABLE exemplar
 nullable column. Why is this simpler than adding a `NOT NULL` column to an
 already-populated table? What steps would be needed for a `NOT NULL` column?
 
-> *Your answer:*
+> *Your answer:* A nullable column defaults to NULL for existing rows: no data needs to be touched. A `NOT NULL` column requires a value for every existing row, so you must either supply a `DEFAULT` or do the full four-step rebuild with a backfill `UPDATE`.
 
 **Question 4.2:** SQLite's limited `ALTER TABLE` support is a deliberate
 design decision. What does this tell you about the trade-off between a
 lightweight embedded database and a full-featured server database system?
 Name one scenario where SQLite is the right choice and one where it is not.
 
-> *Your answer:*
+> *Your answer:* SQLite trades DDL flexibility for simplicity: no server, no config, just a file. Right choice: a mobile app with local storage. Wrong choice: a multi-user web backend with concurrent writes and evolving schema.
 
 Commit:
 
@@ -544,7 +552,7 @@ SELECT * FROM ausleihe WHERE ausleihe_id = 5;
 
 > **Screenshot 3:** Take a screenshot showing the inserted row.
 >
-> `[insert screenshot]`
+> ![Screenshot 3](assets/Screenshot_3.png)
 
 ### Task 5b – Simulate a Rollback
 
@@ -569,7 +577,8 @@ SELECT rueckgabe_datum FROM ausleihe WHERE ausleihe_id = 2;
 SELECT COUNT(*) FROM ausleihe WHERE ausleihe_id = 6;
 ```
 
-> *Describe what you see and explain why `ROLLBACK` reversed both changes:*
+> *Describe what you see and explain why `ROLLBACK` reversed both changes:* 
+The UPDATE had no effect since ausleihe_id 2 no longer exists (deleted in Task 3c). The INSERT failed with a FOREIGN KEY constraint error because exemplar 3 was also deleted. ROLLBACK reversed both statements atomically: neither change reached the database. This demonstrates that ROLLBACK undoes the entire transaction as a unit, not just the failing statement.
 
 ### Questions for Task 5
 
@@ -577,20 +586,22 @@ SELECT COUNT(*) FROM ausleihe WHERE ausleihe_id = 6;
 availability check and the insert happen inside the same transaction?
 What could go wrong if they ran as separate Autocommit statements?
 
-> *Your answer:*
+> *Your answer:* Separate autocommit statements leave a gap: another session can slip in a loan for the same copy between your check and your INSERT. The check passes, but now you have two open loans. A transaction closes that gap. What you read during the check stays consistent until you commit.
+
 
 **Question 5.2:** The lecture states: "Ein fehlendes `WHERE` aktualisiert
 alle Zeilen." Write the single most dangerous `UPDATE` statement possible
 on this database and explain the damage it would cause. Then explain how
 `BEGIN` / `ROLLBACK` would allow you to recover.
 
-> *Your answer:*
+> *Your answer:* `UPDATE ausleihe SET exemplar_id = 1;`
+> This overwrites every loan record to reference exemplar 1: all original exemplar associations are permanently lost, making the lending history meaningless. With BEGIN/ROLLBACK you can run it, see the damage in a SELECT, and roll back before it ever commits.
 
 **Question 5.3:** Autocommit is convenient for read-only queries (`SELECT`).
 Is it also safe for DML in an interactive session? Give a concrete example
 from this exercise where Autocommit would have caused irreversible data loss.
 
-> *Your answer:*
+> *Your answer:* No. Autocommit is dangerous for DML because every statement is immediately permanent. A concrete example from this exercise: in Task 3c, the `DELETE` removing the loan associated with exemplar 3 would have been irreversible without `BEGIN/ROLLBACK`. The verify `SELECT` would have shown the row gone with no way to recover it.
 
 Commit:
 
@@ -608,8 +619,8 @@ The lecture warns against using `TEXT` for everything. Looking at the
 `buch` table: which column would be most tempting to store as `TEXT` when
 it should be a more specific type, and what concrete query would break or
 produce wrong results if the wrong type were used?
-
-> *Your answer:*
+ 
+> *Your answer:* `erscheinungsjahr` most tempting to store as TEXT. If stored as TEXT, range queries like `WHERE erscheinungsjahr < 1960` would use lexicographic comparison instead of numeric, producing wrong results (e.g. `999` would sort after `1960`).
 
 **Question B – DDL as documentation:**  
 A colleague reads your `schema.sql` and says: "Constraints slow down inserts
@@ -618,13 +629,15 @@ reasons why enforcing constraints in the database is preferable to
 enforcing them only in application code.
 
 > *Your answer:*
+> 1. The database is the single source of truth — application code can be bypassed (direct SQL access, scripts, other apps), but a DB constraint is always enforced regardless of how data enters.
+> 2. onstraints are atomic and consistent across all clients simultaneously — application-level checks can fail under race conditions (two concurrent inserts both pass the check before either commits).
 
 **Question C – NULL semantics in lending:**  
 In `ausleihe`, `rueckgabe_datum IS NULL` means "currently on loan". Could
 this semantic be expressed without using `NULL` — e.g. by using a status
 column instead? What are the trade-offs?
 
-> *Your answer:*
+> *Your answer:* Yes — a status TEXT column with values like 'on_loan' / 'returned' could replace NULL semantics. Trade-offs: a status column is more readable and extensible (e.g. add 'lost'), but introduces a new consistency problem — rueckgabe_datum and status could contradict each other. NULL is simpler and self-consistent: the absence of a return date is the state. No second column to keep in sync.
 
 **Question D – `TRUNCATE` vs. `DELETE`:**  
 If you wanted to reset the entire database and reload the sample data from
@@ -632,13 +645,17 @@ scratch, you would need to empty all four tables. Can you use `TRUNCATE`
 in SQLite? What alternative would you use, and in what order must the tables
 be emptied to respect foreign key constraints?
 
-> *Your answer:*
+> *Your answer:* SQLite has no TRUNCATE. Use DELETE FROM without a WHERE clause instead. To respect foreign key constraints, empty tables in reverse dependency order:
+> 1.`ausleihe` (references exemplar and mitglied)
+> 2.`exemplar` (references buch)
+> 3.`mitglied`
+> 4.`buch`
 
 > **Screenshot 4:** Take a screenshot showing the output of the row-count
 > verification from Task 3a after completing all DML tasks, with
 > `.headers on` and `.mode column` active.
 >
-> `[insert screenshot]`
+> ![Screenshot 4](assets/Screenshot_4.png)
 
 ---
 
